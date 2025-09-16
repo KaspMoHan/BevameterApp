@@ -69,7 +69,7 @@ class SelectionWindow(QMainWindow):
         self.child.show()
 
     def run_manual_rubber(self):
-        self.child = manual_rubber_window.ManualRubberWindow(parent=self)
+        self.child = manual_rubber_window.ManualRubberWindow(parent=self,io_worker=self.io)
         self.child.closed.connect(self.show)
         self.child.show()
 
