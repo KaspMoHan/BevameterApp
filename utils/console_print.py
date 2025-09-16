@@ -1,9 +1,9 @@
 # utils/console_print.py
-from PyQt5 import QtCore
+from PySide6 import QtCore
 
 class _ConsoleBus(QtCore.QObject):
     # channel, text
-    message = QtCore.pyqtSignal(str, str)
+    message = QtCore.Signal(str, str)
 
 bus = _ConsoleBus()
 

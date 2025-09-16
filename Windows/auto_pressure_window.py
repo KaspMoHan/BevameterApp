@@ -1,5 +1,5 @@
-from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtWidgets import QWidget, QPlainTextEdit
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtWidgets import QWidget, QPlainTextEdit
 
 from widgets.live_plot import LivePlotWidget
 from utils.DataGenerator import generate_next_sine
@@ -7,7 +7,7 @@ from utils.console_print import connect_console, disconnect_console, print_conso
 
 
 class autoPressureWindow(QtWidgets.QMainWindow):
-    closed = QtCore.pyqtSignal()
+    closed = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -21,6 +21,7 @@ class autoPressureWindow(QtWidgets.QMainWindow):
         self.btn_up = QtWidgets.QPushButton("Up")
         self.btn_down    = QtWidgets.QPushButton("Down")
         self.btn_return  = QtWidgets.QPushButton("Return")
+        self.btn_stop = QtWidgets.QPushButton("Stop")
         self.btn_log     = QtWidgets.QPushButton("Log")
 
         controls = QtWidgets.QVBoxLayout()
@@ -28,6 +29,7 @@ class autoPressureWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.btn_down)
         controls.addWidget(self.btn_return)
         controls.addStretch()
+        controls.addWidget(self.btn_stop)
         controls.addWidget(self.btn_log)
 
         controls_widget = QWidget()

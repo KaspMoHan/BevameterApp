@@ -83,3 +83,17 @@ def length_to_bits(length: float) -> int:
         Integer bits in [0, MAX_DAC_BITS].
     """
     return voltage_to_bits(length_to_voltage(length))
+
+def percent_to_bits(percent: float,
+                    max_bits: int = MAX_DAC_BITS,
+                    v_target: float = 10.0,
+                    dac_fullscale: float = 11.0) -> int:
+    """
+    Map 0–100 % to DAC bits such that 100% = 10 V output,
+    when the DAC’s full-scale is 11 V.
+    """
+    p = 0.0 if percent is None else float(percent)
+    if p < 0.0: p = 0.0
+    if p > 100.0: p = 100.0
+    scale = (v_target / dac_fullscale)   # 10/11
+    return int(round((p / 100.0) * max_bits * scale))

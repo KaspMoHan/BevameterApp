@@ -1,12 +1,12 @@
 import sys
-from PyQt5.QtWidgets import QApplication
-from Windows.selection_window import SelectionWindow
+from PySide6.QtWidgets import QApplication
+from Windows.opta_window import OptaWindow
 
 def main():
     app = QApplication(sys.argv)
-    window = SelectionWindow()
+    window = OptaWindow()
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 if __name__ == '__main__':
     main()

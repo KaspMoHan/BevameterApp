@@ -1,5 +1,5 @@
-from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtWidgets import QWidget, QPlainTextEdit
+from PySide6 import QtCore, QtWidgets
+from PySide6.QtWidgets import QWidget, QPlainTextEdit
 
 from widgets.live_plot import LivePlotWidget
 from utils.DataGenerator import generate_next_sine
@@ -7,7 +7,7 @@ from utils.console_print import connect_console, disconnect_console, print_conso
 
 
 class autoGrouserWindow(QtWidgets.QMainWindow):
-    closed = QtCore.pyqtSignal()
+    closed = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -22,12 +22,14 @@ class autoGrouserWindow(QtWidgets.QMainWindow):
         self.btn_zero    = QtWidgets.QPushButton("Zero")
         self.btn_return  = QtWidgets.QPushButton("Return")
         self.btn_log     = QtWidgets.QPushButton("Log")
+        self.btn_stop = QtWidgets.QPushButton("Stop")
 
         controls = QtWidgets.QVBoxLayout()
         controls.addWidget(self.btn_Start)
         controls.addWidget(self.btn_zero)
         controls.addWidget(self.btn_return)
         controls.addStretch()
+        controls.addWidget(self.btn_stop)
         controls.addWidget(self.btn_log)
 
         controls_widget = QWidget()

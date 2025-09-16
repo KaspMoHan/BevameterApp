@@ -1,7 +1,7 @@
 # widgets/live_plot.py
 import time
 import numpy as np
-from PyQt5 import QtCore, QtWidgets
+from PySide6 import QtCore, QtWidgets
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -28,7 +28,7 @@ class LivePlotWidget(QtWidgets.QWidget):
         self.ax.set_xlabel("Time [s]")
         self.ax.set_ylabel("Signal")
         self.ax.set_xlim(0, self.window_seconds)
-        self.ax.set_ylim(-3, 3)
+        self.ax.set_ylim(0, 500)
 
         # ---- controls ----
         self.btn_clear = QtWidgets.QPushButton("Clear")
