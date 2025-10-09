@@ -79,12 +79,12 @@ class SelectionWindow(QMainWindow):
         self.child.show()
 
     def run_auto_grouser(self):
-        self.child = auto_grouser_window.autoGrouserWindow(parent=self)
+        self.child = auto_grouser_window.autoGrouserWindow(parent=self, io_worker=self.io)
         self.child.closed.connect(self.show)
         self.child.show()
 
     def run_auto_rubber(self):
-        self.child = auto_rubber_window.autoRubberWindow(parent=self)
+        self.child = auto_rubber_window.autoRubberWindow(parent=self,io_worker=self.io)
         self.child.closed.connect(self.show)
         self.child.show()
 

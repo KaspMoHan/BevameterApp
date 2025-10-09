@@ -34,12 +34,17 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         self.btn_forward = QtWidgets.QPushButton("Forward")
         self.btn_back    = QtWidgets.QPushButton("Backwards")
         self.btn_return  = QtWidgets.QPushButton("Return")
+        self.btn_winch_up = QtWidgets.QPushButton("Winch Up")
+        self.btn_winch_down = QtWidgets.QPushButton("Winch Down")
         self.btn_log     = QtWidgets.QPushButton("Log")
         self.btn_stop    = QtWidgets.QPushButton("Stop")
+
 
         controls = QtWidgets.QVBoxLayout()
         controls.addWidget(self.btn_forward)
         controls.addWidget(self.btn_back)
+        controls.addWidget(self.btn_winch_up)
+        controls.addWidget(self.btn_winch_down)
         controls.addWidget(self.btn_return)
         controls.addStretch()
         controls.addWidget(self.btn_stop)
@@ -85,16 +90,18 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         # optional: wire actuator buttons to io_worker commands (safe no-op if io is None)
         self.btn_forward.clicked.connect(self.on_forward)
         self.btn_back.clicked.connect(self.on_backward)
+        self.btn_winch_up.clicked.connect(self.on_winch_up)
+        self.btn_winch_down.clicked.connect(self.on_winch_down)
         self.btn_stop.clicked.connect(self.on_stop)
 
     # ---------- Plot data providers (called by LivePlotWidget @ 50 Hz) ----------
-    # in ManualGrouserWindow
     # in ManualGrouserWindow
     def _data_fn_for(self, key: str):
         def _fn(t):  # <-- accept t; ignore it for snapshot pulls
             if self.io is None:
                 return float(self._last_values.get(key, 0.0))
             frame = self.io.snapshot()
+
             if not frame:
                 return float(self._last_values.get(key, 0.0))
             val = frame.get(key, None)
@@ -140,11 +147,18 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
     def on_stop(self):
         self._send_cmd("grouser:SPEED:0")
         self._send_cmd("ALL:DIR:OFF")
+        self._send_cmd("WINCH:STOP")
 
     def on_return(self):
         self._send_cmd("grouser:SPEED:0")
         self._send_cmd("ALL:DIR:OFF")
         self.close()
+
+    def on_winch_up(self):
+        self._send_cmd("WINCH:UP")
+
+    def on_winch_down(self):
+        self._send_cmd("WINCH:DOWN")
 
 
     # ---------- lifecycle ----------
