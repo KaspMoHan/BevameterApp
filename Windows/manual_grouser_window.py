@@ -18,25 +18,21 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         self.plot1_key = plot1_key
         self.plot2_key = plot2_key
 
-        # toggle state
+        # active jog state
         self._active_dir = None  # None / "FWD" / "BWD"
 
-        # cache to avoid plot jumps
         self._last_values = {self.plot1_key: 0.0, self.plot2_key: 0.0}
 
-        # --- plots (each LivePlotWidget calls its data_fn @ 50Hz) ---
+        # --- plots ---
         self.plot1 = LivePlotWidget(
             self, self._data_fn_for(self.plot1_key),
-            50, 10.0,
-            ymin=0, ymax=1000,
-            show_ma=True, ma_window=10,
+            50, 10.0, ymin=0, ymax=1000, show_ma=True, ma_window=10
         )
         self.plot1.ax.set_ylabel("Torque [Nm]")
 
         self.plot2 = LivePlotWidget(
             self, self._data_fn_for(self.plot2_key),
-            50, 10.0,
-            ymin=0, ymax=1000,
+            50, 10.0, ymin=0, ymax=1000,
             show_ma=True, ma_window=10,
             show_velocity=True, vel_window=7,
             y2min=-50, y2max=50, y2label="Velocity [mm/s]",
@@ -45,37 +41,26 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         self.plot2.ax.set_ylabel("Length [mm]")
 
         # --- controls ---
-        self.lbl_speed = QtWidgets.QLabel("Speed")
         self.spin_speed = QtWidgets.QDoubleSpinBox()
         self.spin_speed.setRange(0, 100)
         self.spin_speed.setDecimals(0)
         self.spin_speed.setSingleStep(5)
         self.spin_speed.setSuffix(" %")
-        self.spin_speed.setValue(0)  # default 0%
+        self.spin_speed.setValue(0)
 
-        self.btn_forward   = QtWidgets.QPushButton("Forward")
-        self.btn_back      = QtWidgets.QPushButton("Backwards")
-        self.btn_forward.setCheckable(True)
-        self.btn_back.setCheckable(True)
-        self.dir_group = QtWidgets.QButtonGroup(self)
-        self.dir_group.setExclusive(True)
-        self.dir_group.addButton(self.btn_forward, 1)
-        self.dir_group.addButton(self.btn_back, 2)
+        self.btn_forward = QtWidgets.QPushButton("Forward")
+        self.btn_back = QtWidgets.QPushButton("Backwards")
 
-        self.btn_winch_up   = QtWidgets.QPushButton("Winch Up")
+        self.btn_winch_up = QtWidgets.QPushButton("Winch Up")
         self.btn_winch_down = QtWidgets.QPushButton("Winch Down")
-        self.btn_log        = QtWidgets.QPushButton("Log")
-        self.btn_stop       = QtWidgets.QPushButton("Stop")
-        self.btn_return     = QtWidgets.QPushButton("Return")
+        self.btn_stop = QtWidgets.QPushButton("Stop")
+        self.btn_return = QtWidgets.QPushButton("Return")
+        self.btn_log = QtWidgets.QPushButton("Log")
 
         # layout
-        speed_row = QtWidgets.QHBoxLayout()
-        speed_row.addWidget(self.lbl_speed)
-        speed_row.addWidget(self.spin_speed)
-        speed_row.addStretch()
-
         controls = QtWidgets.QVBoxLayout()
-        controls.addLayout(speed_row)
+        controls.addWidget(QtWidgets.QLabel("Speed"))
+        controls.addWidget(self.spin_speed)
         controls.addWidget(self.btn_forward)
         controls.addWidget(self.btn_back)
         controls.addWidget(self.btn_winch_up)
@@ -84,126 +69,131 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         controls.addStretch()
         controls.addWidget(self.btn_stop)
         controls.addWidget(self.btn_log)
-        controls_widget = QWidget(); controls_widget.setLayout(controls)
+
+        controls_widget = QWidget()
+        controls_widget.setLayout(controls)
 
         hbox = QtWidgets.QHBoxLayout()
-        hbox.addWidget(self.plot1, stretch=1)
-        hbox.addWidget(self.plot2, stretch=1)
+        hbox.addWidget(self.plot1, 1)
+        hbox.addWidget(self.plot2, 1)
         hbox.addWidget(controls_widget)
-        top_widget = QWidget(); top_widget.setLayout(hbox)
 
-        # console
-        self.console = QPlainTextEdit(); self.console.setReadOnly(True); self.console.setMaximumBlockCount(1000)
-        font = self.console.font(); font.setFamily("Consolas"); self.console.setFont(font)
+        top_widget = QWidget()
+        top_widget.setLayout(hbox)
+
+        self.console = QPlainTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setMaximumBlockCount(1000)
+        font = self.console.font()
+        font.setFamily("Consolas")
+        self.console.setFont(font)
         connect_console(self.console, channel="grouser")
-        print_console("Manual Grouser ready.", channel="grouser")
 
         vbox = QtWidgets.QVBoxLayout()
         vbox.addWidget(top_widget)
-        vbox.addWidget(self.console, stretch=1)
-        container = QWidget(); container.setLayout(vbox)
+        vbox.addWidget(self.console)
+        container = QWidget()
+        container.setLayout(vbox)
         self.setCentralWidget(container)
 
-        # wiring
-        self.btn_return.clicked.connect(self.on_return)
-        self.btn_back.clicked.connect(self.BackBtn)  # log only
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
-        self.btn_forward.toggled.connect(self._on_dir_toggled)
-        self.btn_back.toggled.connect(self._on_dir_toggled)
-        self.spin_speed.valueChanged.connect(self._on_speed_changed)
+        # ---------- wiring ----------
+        self.spin_speed.valueChanged.connect(self._update_speed_if_active)
 
-        self.btn_winch_up.clicked.connect(self.on_winch_up)
-        self.btn_winch_down.clicked.connect(self.on_winch_down)
+        # ACTUATOR JOG
+        self.btn_forward.pressed.connect(lambda: self._actuator_press("FWD"))
+        self.btn_forward.released.connect(self._actuator_release)
+
+        self.btn_back.pressed.connect(lambda: self._actuator_press("BWD"))
+        self.btn_back.released.connect(self._actuator_release)
+
+        # WINCH JOG
+        self.btn_winch_up.pressed.connect(lambda: self._send_cmd("GROUSER:WINCH:UP"))
+        self.btn_winch_up.released.connect(lambda: self._send_cmd("GROUSER:WINCH:STOP"))
+
+        self.btn_winch_down.pressed.connect(lambda: self._send_cmd("GROUSER:WINCH:DOWN"))
+        self.btn_winch_down.released.connect(lambda: self._send_cmd("GROUSER:WINCH:STOP"))
+
         self.btn_stop.clicked.connect(self.on_stop)
+        self.btn_return.clicked.connect(self.on_return)
 
-    # ---------- data providers ----------
-    def _data_fn_for(self, key: str):
+        print_console("Manual Grouser ready (JOG mode).", channel="grouser")
+
+    # ---------- data ----------
+    def _data_fn_for(self, key):
         def _fn(_t):
-            if self.io is None:
-                return float(self._last_values.get(key, 0.0))
+            if not self.io:
+                return self._last_values.get(key, 0.0)
             frame = self.io.snapshot() or {}
-            if not frame:
-                return float(self._last_values.get(key, 0.0))
-            val = frame.get(key, None)
+            val = frame.get(key)
             try:
-                if val is None:
-                    return float(self._last_values.get(key, 0.0))
                 fval = float(bits_to_length(float(val)))
                 self._last_values[key] = fval
                 return fval
-            except (TypeError, ValueError):
-                return float(self._last_values.get(key, 0.0))
+            except Exception:
+                return self._last_values.get(key, 0.0)
         return _fn
 
-    # ---------- motion logic ----------
-    def _on_dir_toggled(self, checked: bool):
-        sender = self.sender()
-        if sender not in (self.btn_forward, self.btn_back):
-            return
-        dir_str = "FWD" if sender is self.btn_forward else "BWD"
+    # ---------- ACTUATOR JOG ----------
+    def _actuator_press(self, direction):
+        self._active_dir = direction
+        self._send_cmd(f"DIR:{direction}:grouser")
+        self._apply_speed()
 
-        if checked:
-            if self._active_dir and self._active_dir != dir_str:
-                self._send_cmd("grouser:SPEED:0")
-            self._send_cmd(f"DIR:{dir_str}:grouser")
-            self._active_dir = dir_str
-            self._apply_speed()
-        else:
-            if not self.btn_forward.isChecked() and not self.btn_back.isChecked():
-                self.on_stop()
+    def _actuator_release(self):
+        self._send_cmd("grouser:SPEED:0")
+        self._send_cmd("ALL:DIR:OFF")
+        self._active_dir = None
 
-    def _on_speed_changed(self, _value):
-        if self._active_dir in ("FWD", "BWD"):
+    def _update_speed_if_active(self, _):
+        if self._active_dir:
             self._apply_speed()
 
     def _apply_speed(self):
-        bits = percent_to_bits(float(self.spin_speed.value()))
+        bits = percent_to_bits(self.spin_speed.value())
         if bits <= 0:
             self._send_cmd("grouser:SPEED:0")
         else:
             self._send_cmd(f"grouser:SPEED:{bits}")
 
     # ---------- helpers ----------
-    def _send_cmd(self, cmd: str):
-        if self.io is not None:
-            try:
-                self.io.enqueue_command(cmd, require_ack=True)
-                print_console(f">>> {cmd}", channel="grouser")
-            except Exception as e:
-                print_console(f"[ERROR] enqueue_command failed: {e}", channel="grouser")
-        else:
-            print_console("[WARN] No io_worker connected.", channel="grouser")
+    def _send_cmd(self, cmd):
+        if not self.io:
+            return
+        try:
+            self.io.enqueue_command(cmd, require_ack=True)
+            print_console(f">>> {cmd}", channel="grouser")
+        except Exception as e:
+            print_console(f"[ERROR] {e}", channel="grouser")
 
-    def BackBtn(self):
-        print_console("Back button pressed", channel="grouser")
+    # ---------- SAFETY ----------
+    def focusOutEvent(self, e):
+        self.on_stop()
+        super().focusOutEvent(e)
 
-    def on_winch_up(self):
-        self._send_cmd("GROUSER:WINCH:UP")
-
-    def on_winch_down(self):
-        self._send_cmd("GROUSER:WINCH:DOWN")
+    def leaveEvent(self, e):
+        self.on_stop()
+        super().leaveEvent(e)
 
     def on_stop(self):
         self._send_cmd("grouser:SPEED:0")
         self._send_cmd("ALL:DIR:OFF")
         self._send_cmd("GROUSER:WINCH:STOP")
-        for btn in (self.btn_forward, self.btn_back):
-            was = btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.blockSignals(was)
         self._active_dir = None
-        print_console("[STOP] Motion stopped.", channel="grouser")
+        print_console("[STOP] All motion stopped.", channel="grouser")
 
     def on_return(self):
         self.on_stop()
         self.close()
 
-    # ---------- lifecycle ----------
     def closeEvent(self, e):
         try:
-            self.plot1.stop(); self.plot2.stop()
+            self.plot1.stop()
+            self.plot2.stop()
         except Exception:
             pass
+        self.on_stop()
         disconnect_console(self.console)
         self.closed.emit()
         super().closeEvent(e)

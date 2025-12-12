@@ -18,7 +18,7 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         self.plot1_key = plot1_key   # expects ADC bits (torque)
         self.plot2_key = plot2_key   # expects ADC bits (position)
 
-        # track current motion for toggle logic
+        # active jog state (actuator)
         self._active_dir = None  # None / "FWD" / "BWD"
 
         # last values to avoid plot jumps
@@ -54,12 +54,10 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
 
         self.btn_forward = QtWidgets.QPushButton("Forward")
         self.btn_back    = QtWidgets.QPushButton("Backwards")
-        self.btn_forward.setCheckable(True)
-        self.btn_back.setCheckable(True)
-        self.dir_group = QtWidgets.QButtonGroup(self)
-        self.dir_group.setExclusive(True)
-        self.dir_group.addButton(self.btn_forward, 1)
-        self.dir_group.addButton(self.btn_back, 2)
+
+        # (no longer toggle)
+        self.btn_forward.setCheckable(False)
+        self.btn_back.setCheckable(False)
 
         self.btn_winch_up = QtWidgets.QPushButton("Winch Up")
         self.btn_winch_down = QtWidgets.QPushButton("Winch Down")
@@ -96,7 +94,7 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         self.console.setMaximumBlockCount(1000)
         font = self.console.font(); font.setFamily("Consolas"); self.console.setFont(font)
         connect_console(self.console, channel="rubber")
-        print_console("Manual rubber ready.", channel="rubber")
+        print_console("Manual rubber ready (JOG mode).", channel="rubber")
 
         vbox = QtWidgets.QVBoxLayout()
         vbox.addWidget(top_widget)
@@ -104,28 +102,40 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         container = QWidget(); container.setLayout(vbox)
         self.setCentralWidget(container)
 
+        # ensure we get focus-out events reliably
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+
         # wiring
         self.btn_return.clicked.connect(self.on_return)
         self.btn_back.clicked.connect(self.BackBtn)  # keep your log line
 
-        self.btn_forward.toggled.connect(self._on_dir_toggled)
-        self.btn_back.toggled.connect(self._on_dir_toggled)
-        self.spin_speed.valueChanged.connect(self._on_speed_changed)
+        # ✅ ACTUATOR JOG (press-and-hold)
+        self.btn_forward.pressed.connect(lambda: self._actuator_press("FWD"))
+        self.btn_forward.released.connect(self._actuator_release)
 
-        self.btn_winch_up.clicked.connect(self.on_winch_up)
-        self.btn_winch_down.clicked.connect(self.on_winch_down)
+        self.btn_back.pressed.connect(lambda: self._actuator_press("BWD"))
+        self.btn_back.released.connect(self._actuator_release)
+
+        # speed updates live while jogging
+        self.spin_speed.valueChanged.connect(self._update_speed_if_active)
+
+        # ✅ WINCH JOG: only active while pressed
+        self.btn_winch_up.pressed.connect(self._winch_up_press)
+        self.btn_winch_up.released.connect(self._winch_release)
+        self.btn_winch_down.pressed.connect(self._winch_down_press)
+        self.btn_winch_down.released.connect(self._winch_release)
+
         self.btn_stop.clicked.connect(self.on_stop)
 
     # ---------- Plot data providers ----------
     def _data_fn_for(self, key: str):
         key_l = key.lower()
-        # ✅ choose the proper ADC→unit converter based on key name
         if "torque" in key_l:
-            converter = bits_to_torque         # ADC bits → torque [Nm]
+            converter = bits_to_torque
         elif "pos" in key_l or "length" in key_l:
-            converter = adc_bits_to_length         # ADC bits → length [mm]
+            converter = adc_bits_to_length
         else:
-            converter = float                  # passthrough
+            converter = float
 
         def _fn(_t):
             if self.io is None:
@@ -142,30 +152,28 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
                 return float(self._last_values.get(key, 0.0))
         return _fn
 
-    # ---------- Direction / Speed ----------
-    def _on_dir_toggled(self, checked: bool):
-        sender = self.sender()
-        if sender not in (self.btn_forward, self.btn_back):
+    # ---------- ACTUATOR (JOG) ----------
+    def _actuator_press(self, direction: str):
+        if self.io is None:
+            print_console("[JOG] No io_worker connected.", channel="rubber")
             return
-        dir_str = "FWD" if sender is self.btn_forward else "BWD"
+        self._active_dir = direction
+        self._send_cmd(f"DIR:{direction}:rubber")
+        self._apply_speed()
 
-        if checked:
-            if self._active_dir and self._active_dir != dir_str:
-                self._send_cmd("rubber:SPEED:0")  # zero before reversing
-            self._send_cmd(f"DIR:{dir_str}:rubber")
-            self._active_dir = dir_str
-            self._apply_speed()
-        else:
-            if not self.btn_forward.isChecked() and not self.btn_back.isChecked():
-                self.on_stop()
+    def _actuator_release(self):
+        # stop actuator motion immediately on release
+        self._send_cmd("rubber:SPEED:0")
+        self._send_cmd("ALL:DIR:OFF")
+        self._active_dir = None
 
-    def _on_speed_changed(self, _value):
+    def _update_speed_if_active(self, _value):
         if self._active_dir in ("FWD", "BWD"):
             self._apply_speed()
 
     def _apply_speed(self):
         pct = float(self.spin_speed.value())
-        bits = percent_to_bits(pct)  # ✅ DAC percent → DAC bits
+        bits = percent_to_bits(pct)
         if bits <= 0:
             self._send_cmd("rubber:SPEED:0")
         else:
@@ -185,21 +193,29 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
     def BackBtn(self):
         print_console("Back button pressed", channel="rubber")
 
-    def on_winch_up(self):
+    # ---------- WINCH (JOG) ----------
+    def _winch_up_press(self):
         self._send_cmd("RUBBER:WINCH:UP")
 
-    def on_winch_down(self):
+    def _winch_down_press(self):
         self._send_cmd("RUBBER:WINCH:DOWN")
+
+    def _winch_release(self):
+        self._send_cmd("RUBBER:WINCH:STOP")
+
+    # Safety: if the window loses focus / mouse leaves while holding, stop everything
+    def focusOutEvent(self, e):
+        self.on_stop()
+        super().focusOutEvent(e)
+
+    def leaveEvent(self, e):
+        self.on_stop()
+        super().leaveEvent(e)
 
     def on_stop(self):
         self._send_cmd("rubber:SPEED:0")
         self._send_cmd("ALL:DIR:OFF")
         self._send_cmd("RUBBER:WINCH:STOP")
-        # cleanly untoggle without re-entering handlers
-        for btn in (self.btn_forward, self.btn_back):
-            was = btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.blockSignals(was)
         self._active_dir = None
         print_console("[STOP] Motion stopped.", channel="rubber")
 
@@ -213,6 +229,7 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
             self.plot1.stop(); self.plot2.stop()
         except Exception:
             pass
+        self.on_stop()
         disconnect_console(self.console)
         self.closed.emit()
         super().closeEvent(e)
