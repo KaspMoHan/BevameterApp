@@ -74,7 +74,7 @@ class SelectionWindow(QMainWindow):
         self.child.show()
 
     def run_manual_pressure(self):
-        self.child = manual_pressure_window.ManualPressureWindow(parent=self)
+        self.child = manual_pressure_window.ManualPressureWindow(parent=self,io_worker=self.io)
         self.child.closed.connect(self.show)
         self.child.show()
 

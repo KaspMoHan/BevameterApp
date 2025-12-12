@@ -23,7 +23,7 @@ DAC_FS_V_V:  float = 11.0           # hardware full-scale
 DAC_TARGET_V: float = 10.0          # we treat 100% as 10 V (cap)
 
 # Mechanics / scaling
-MAX_LENGTH_MM: float = 1200.0       # length at 10 V
+MAX_LENGTH_MM: float = 500       # length at 10 V
 
 # Torque calibration
 TORQUE_V_PER_NM: float = 0.02       # 0.02 V per Nm (sensor nominal)

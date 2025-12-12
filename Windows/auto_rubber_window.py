@@ -4,14 +4,17 @@ from PySide6.QtWidgets import QWidget, QPlainTextEdit
 
 from widgets.live_plot import LivePlotWidget
 from utils.console_print import connect_console, disconnect_console, print_console
-from controller.conversions import bits_to_length, bits_to_torque, percent_to_bits
+from controller.conversions import adc_bits_to_length, bits_to_torque, percent_to_bits
+
+# NEW: reusable logger controls
+from widgets.logger_controls import LoggerControls
 
 
 # --- helpers/limits ---
 def counts_to_mm(counts: float) -> float:
     """ADC counts -> extension [mm] via your calibration pipeline."""
     try:
-        return float(bits_to_length(float(counts)))
+        return float(adc_bits_to_length(float(counts)))
     except Exception:
         return 0.0
 
@@ -27,11 +30,10 @@ class RotaryToLinearTrajectory:
       r = crank radius [mm]
       A(t) = theta0 + omega * t  (clamped to [0, T])
     Returns eye-to-eye length and its time derivative.
-    NOTE: In the UI we keep names A_mm, B_mm for backward-compat; here A_mm:=x, B_mm:=r.
     """
     def __init__(self, A_mm: float, B_mm: float, theta0_deg: float, delta_deg: float, duration_s: float):
-        self.x = float(A_mm)            # <- fixed distance x
-        self.r = float(B_mm)            # <- crank radius r
+        self.x = float(A_mm)            # fixed distance x
+        self.r = float(B_mm)            # crank radius r
         self.theta0 = math.radians(theta0_deg)
         self.delta  = math.radians(delta_deg)
         self.T      = float(duration_s)
@@ -44,21 +46,16 @@ class RotaryToLinearTrajectory:
         return self.theta0 + self.omega * tau
 
     def length(self, t: float) -> float:
-        """Eye-to-eye length L_e2e(t) [mm]."""
         th = self._theta(t)
-        # L = sqrt(x^2 + r^2 - 2 x r cos(th))
         return math.sqrt(self._x2 + self._r2 - 2.0 * self.x * self.r * math.cos(th))
 
     def dL_dt(self, t: float, dtheta_dt: float = None) -> float:
-        """Time derivative dL/dt [mm/s]. dtheta_dt defaults to constant self.omega."""
         th = self._theta(t)
         L  = math.sqrt(self._x2 + self._r2 - 2.0 * self.x * self.r * math.cos(th))
         if L <= 1e-9:
             return 0.0
         omega = self.omega if (dtheta_dt is None) else float(dtheta_dt)
-        # dL/dA = (x r sin A)/L, so dL/dt = (x r sin A / L) * dA/dt
         return (self.x * self.r * math.sin(th) / L) * omega
-
 
 
 # --- simple PID (u is mm/s equiv) ---
@@ -86,9 +83,11 @@ class autoRubberWindow(QtWidgets.QMainWindow):
     closed = QtCore.Signal()
 
     def __init__(self, parent=None, io_worker=None,
-                 A_mm=960, B_mm=247.5,
+                 A_mm=960, B_mm=248.0,
                  plot1_key="rubber_torque",   # left plot key (torque)
-                 plot2_key="rubber_pos"       # right plot key (position)
+                 plot2_key="rubber_pos",      # right plot key (position)
+                 L0_e2e_mm=820.0,             # user-measured eye-to-eye at zero extension
+                 auto_theta_from_L0=True      # compute θ0 from L0 at start
                  ):
         super().__init__(parent)
         self.setWindowTitle("auto – rubber")
@@ -96,21 +95,21 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         self.io = io_worker
         self.A, self.B = float(A_mm), float(B_mm)
         self.plot1_key = plot1_key
-        self.plot2_key = plot2_key  # <-- used as the position measurement key
+        self.plot2_key = plot2_key  # used as the position measurement key
 
-        # hidden E2E offset so E2E_meas = L0_e2e + extension
-        self._L0_e2e = 0.0
+        self.L0_e2e_user = float(L0_e2e_mm)
+        self.auto_theta_from_L0 = bool(auto_theta_from_L0)
+        self._L0_e2e = self.L0_e2e_user
 
-        # last values for plotting (extension)
         self._last = {self.plot1_key: 0.0, self.plot2_key: 0.0}
-        self._last_Lsp = 0.0         # extension setpoint for overlay
-        self._last_Lmeas = 0.0       # extension measured
+        self._last_Lsp = 0.0
+        self._last_Lmeas = 0.0
 
         # --- LEFT: torque plot (MA) ---
         self.plot1 = LivePlotWidget(
             self, self._data_fn_for(self.plot1_key),
             update_hz=50, window_seconds=12.0,
-            ymin=0, ymax=500, show_ma=True, ma_window=20,
+            ymin=0, ymax=50, show_ma=True, ma_window=20,
             label="Torque"
         )
         self.plot1.ax.set_ylabel("Torque [Nm]")
@@ -119,7 +118,7 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         self.plot2 = LivePlotWidget(
             self, self._data_fn_for(self.plot2_key),  # measured extension
             update_hz=50, window_seconds=12.0,
-            ymin=0, ymax=1000,
+            ymin=0, ymax=550,
             show_ma=True, ma_window=10,
             show_velocity=True, vel_window=7,
             show_vel_ma=True, vel_ma_window=20,
@@ -135,18 +134,28 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         self.btn_Zero   = QtWidgets.QPushButton("Zero")
         self.btn_tare   = QtWidgets.QPushButton("tare θ0 from current L")
         self.btn_return = QtWidgets.QPushButton("Return")
-        self.btn_log    = QtWidgets.QPushButton("Log")
         self.btn_stop   = QtWidgets.QPushButton("Stop")
+
+        # NEW: Start/Stop logging controls (CSV)
+        self.logger_controls = LoggerControls(
+            parent=self,
+            io_worker=self.io,
+            console_channel="rubber",
+            default_folder="logs",
+            default_base="rubber_auto"
+        )
+
+        self.btn_log = QtWidgets.QPushButton("Log")  # kept for layout/back-compat; optional
 
         # trajectory/PID/scaling
         self.spin_deg    = QtWidgets.QDoubleSpinBox(); self.spin_deg.setRange(-3600, 3600); self.spin_deg.setValue(90.0)
-        self.spin_time   = QtWidgets.QDoubleSpinBox(); self.spin_time.setRange(0.1, 300.0); self.spin_time.setValue(10.0)
+        self.spin_time   = QtWidgets.QDoubleSpinBox(); self.spin_time.setRange(0.1, 300.0); self.spin_time.setValue(30.0)
         self.spin_theta0 = QtWidgets.QDoubleSpinBox(); self.spin_theta0.setRange(-3600, 3600); self.spin_theta0.setValue(0.0)
-        self.kp = QtWidgets.QDoubleSpinBox(); self.kp.setRange(0, 1000); self.kp.setDecimals(3); self.kp.setValue(2.0)
+        self.kp = QtWidgets.QDoubleSpinBox(); self.kp.setRange(0, 1000); self.kp.setDecimals(3); self.kp.setValue(3.0)
         self.ki = QtWidgets.QDoubleSpinBox(); self.ki.setRange(0, 1000); self.ki.setDecimals(3); self.ki.setValue(0.0)
         self.kd = QtWidgets.QDoubleSpinBox(); self.kd.setRange(0, 1000); self.kd.setDecimals(3); self.kd.setValue(0.0)
         self.kff = QtWidgets.QDoubleSpinBox(); self.kff.setRange(0, 1000); self.kff.setDecimals(3); self.kff.setValue(1.0)
-        self.scale_bits = QtWidgets.QDoubleSpinBox(); self.scale_bits.setRange(0, 10000); self.scale_bits.setValue(180.0)
+        self.scale_bits = QtWidgets.QDoubleSpinBox(); self.scale_bits.setRange(0, 10000); self.scale_bits.setValue(200.0)
         self.deadband   = QtWidgets.QDoubleSpinBox(); self.deadband.setRange(0.0, 10.0); self.deadband.setDecimals(2); self.deadband.setValue(DEFAULT_DBMM)
 
         form = QtWidgets.QFormLayout()
@@ -165,6 +174,7 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.btn_Zero)
         controls.addWidget(self.btn_tare)
         controls.addWidget(self.btn_return)
+        controls.addWidget(self.logger_controls)  # NEW
         controls.addStretch()
         controls.addWidget(self.btn_stop)
         controls.addWidget(self.btn_log)
@@ -203,15 +213,16 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         self._last_dir = None
         self._last_bits = 0
 
-        self.settle_band_mm = 0.5  # stay within ±0.5 mm to start settling
-        self.settle_time_s = 0.3  # must remain in band for 0.3 s
-        self._settle_start = None  # internal timer for settling
+        # settle logic
+        self.settle_band_mm = 0.5
+        self.settle_time_s  = 0.3
+        self._settle_start  = None
 
         # zeroing state
-        self.zero_target_mm   = 2.0
+        self.zero_target_mm   = 0.0
         self.zero_speed_pct   = 80.0
         self.zero_deadband_mm = 0.2
-        self.zero_timeout_s   = 15.0
+        self.zero_timeout_s   = 30.0
         self._zeroing      = False
         self._zero_dir     = None
         self._zero_started = 0.0
@@ -221,13 +232,18 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         # 100 Hz control loop
         self._timer = QtCore.QTimer(self); self._timer.timeout.connect(self._tick); self._timer.start(10)
 
+        # NEW: acquire shared sensor stream @ 50 Hz while this window is open
+        self._stream_tag = f"rubber:{id(self)}"
+        if self.io is not None and hasattr(self.io, "acquire_stream"):
+            self.io.acquire_stream(self._stream_tag, hz=50.0)
+
     # ---------- data fns (like Manual window) ----------
     def _data_fn_for(self, key: str):
         kl = key.lower()
         if "torque" in kl:
             conv = bits_to_torque        # ADC bits → torque [Nm]
         elif "pos" in kl or "length" in kl:
-            conv = bits_to_length        # ADC bits → extension [mm]
+            conv = adc_bits_to_length    # ADC bits → extension [mm]
         else:
             conv = float
 
@@ -259,6 +275,15 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         if self._zeroing:
             self._finish_zeroing(say="Stopped zeroing to start AUTO.")
 
+        # Optionally compute theta0 from user L0 so geometry matches zero extension
+        if self.auto_theta_from_L0:
+            try:
+                c0 = (self.A*self.A + self.B*self.B - self.L0_e2e_user*self.L0_e2e_user) / (2.0*self.A*self.B)
+                c0 = max(-1.0, min(1.0, c0))
+                self.spin_theta0.setValue(math.degrees(math.acos(c0)))
+            except Exception:
+                pass
+
         # Build trajectory with current UI values
         self._traj = RotaryToLinearTrajectory(
             A_mm=self.A, B_mm=self.B,
@@ -267,21 +292,21 @@ class autoRubberWindow(QtWidgets.QMainWindow):
             duration_s=self.spin_time.value()
         )
 
-        # Measure current EXTENSION and compute hidden E2E offset so
-        # E2E_meas(0) == E2E_sp(0)  → no initial jump.
-        frame = self.io.snapshot() or {}
-        counts = frame.get(self.plot2_key, None)
-        Lext0 = counts_to_mm(counts) if counts is not None else 0.0
-        Lsp0_e2e = self._traj.length(0.0)
-        self._L0_e2e = Lsp0_e2e - Lext0
-        print_console(f"[AUTO] Calibrated L0={self._L0_e2e:.1f} mm (Lsp0_e2e={Lsp0_e2e:.1f}, Lext0={Lext0:.1f})",
-                      channel="rubber")
+        # Use user-provided E2E zero directly (no snapshot calibration)
+        self._L0_e2e = float(self.L0_e2e_user)
+        print_console(f"[AUTO] Using L0 = {self._L0_e2e:.1f} mm (user-measured).", channel="rubber")
 
-        # Init PID
+        # Init PID and **reset output/relay state**
         self._pid = PID(self.kp.value(), self.ki.value(), self.kd.value())
         self._pid.reset()
         self._t0 = time.perf_counter()
         self._running = True
+
+        # NEW: make sure we start clean for relays and settling logic
+        self._last_dir = None
+        self._last_bits = 0
+        self._settle_start = None
+
         print_console("[AUTO] start", channel="rubber")
 
     def _stop_control(self):
@@ -290,9 +315,14 @@ class autoRubberWindow(QtWidgets.QMainWindow):
             self._finish_zeroing(say="Zeroing aborted by Stop.")
         self._send("rubber:SPEED:0")
         self._send("ALL:DIR:OFF")
+
+        # NEW: clear local knowledge so next run re-asserts direction
+        self._last_dir = None
+        self._last_bits = 0
+
         print_console("[AUTO] stop", channel="rubber")
 
-    # ---------- ZERO: go to 2 mm at 80% (no PID) ----------
+    # ---------- ZERO: go to 0 mm at 80% (no PID) ----------
     def _zero_actuator(self):
         if self.io is None:
             print_console("[ZERO] No io_worker.", channel="rubber"); return
@@ -351,6 +381,11 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         self._send("ALL:DIR:OFF")
         self._zeroing = False
         self._zero_dir = None
+
+        # NEW: clear local output state so next run re-asserts direction
+        self._last_dir = None
+        self._last_bits = 0
+
         if say:
             print_console(f"[ZERO] {say}", channel="rubber")
 
@@ -364,42 +399,48 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         now = time.perf_counter()
         t = now - (self._t0 or now)
 
-        # Eye-to-eye setpoint & rate (signed!)
+        # --- 1) Trajectory in E2E space (for SP + FF only)
         Lsp_e2e = self._traj.length(t)
-        Lsp_dot = self._traj.dL_dt(t)  # can be +/- depending on sin(theta)
+        Lsp_dot = self._traj.dL_dt(t)  # d/dt of E2E; equals d/dt of extension
 
-        # Measurement: extension -> eye-to-eye by adding L0
+        # --- 2) Measured extension
         frame = self.io.snapshot() or {}
         counts = frame.get(self.plot2_key, None)
         if counts is None:
             return
         Lext_meas = counts_to_mm(counts)
-        Le2e_meas = self._L0_e2e + Lext_meas
 
-        # PID on E2E length (error in mm)
-        e = Lsp_e2e - Le2e_meas
-        v_pid = self._pid.step(e, dt=0.01)  # desired mm/s from PID
-        v_ff = float(self.kff.value()) * float(Lsp_dot)  # signed feedforward mm/s
-        v_cmd = v_ff + v_pid  # total desired mm/s (signed)
+        # --- 3) Convert setpoint to extension space and run PID on extension
+        Lsp_ext = max(0.0, Lsp_e2e - self._L0_e2e)      # extension setpoint
+        e = Lsp_ext - Lext_meas                          # extension error [mm]
 
-        # Map |v_cmd| -> DAC bits
+        v_pid = self._pid.step(e, dt=0.01)               # desired mm/s from PID
+        v_ff  = float(self.kff.value()) * float(Lsp_dot) # signed feedforward mm/s
+        v_cmd = v_ff + v_pid                              # total desired mm/s (signed)
+
+        # --- 4) Map |v_cmd| -> DAC bits
         scale = float(self.scale_bits.value())  # bits per (mm/s)
         bits = int(min(BITS_MAX_10V, max(0.0, abs(v_cmd) * scale)))
 
-        # deadband: when we're close, allow zero command
+        # Deadband on extension error
         if abs(e) < float(self.deadband.value()):
             bits = 0
         elif bits > 0:
             bits = max(MIN_BITS, bits)
 
-        # choose direction from the SIGN of v_cmd (not from e)
+        # Direction from sign of commanded velocity (not from error)
         desired_dir = 'FWD' if (v_cmd >= 0.0) else 'BWD'
 
-        # gentle reversals: zero before changing direction if currently driving
+        # NEW: if direction is unknown (e.g., after ALL:DIR:OFF), assert it once
+        if self._last_dir is None:
+            self._send(f"DIR:{desired_dir}:rubber")
+            self._last_dir = desired_dir
+
+        # Gentle reversals: zero before flipping
         if self._last_dir and desired_dir != self._last_dir and self._last_bits > 0:
             self._send("rubber:SPEED:0")
             self._last_bits = 0
-            return  # flip direction on next tick
+            return  # flip on next tick
 
         if desired_dir != self._last_dir:
             self._send(f"DIR:{desired_dir}:rubber")
@@ -412,20 +453,19 @@ class autoRubberWindow(QtWidgets.QMainWindow):
                 self._send(f"rubber:SPEED:{bits}")
             self._last_bits = bits
 
-        # Update what we plot (extension only)
+        # --- 5) Update what we plot (extension only)
         self._last_Lmeas = Lext_meas
-        self._last_Lsp = max(0.0, Lsp_e2e - self._L0_e2e)
+        self._last_Lsp   = Lsp_ext
 
-        # --- settle & hold after the trajectory time ---
+        # --- 6) Settle & hold after the trajectory duration
         if t >= self._traj.T:
             if abs(e) <= self.settle_band_mm:
-                if self._settle_start is None:
+                if getattr(self, "_settle_start", None) is None:
                     self._settle_start = now
                 elif (now - self._settle_start) >= self.settle_time_s:
                     self._stop_control()
                     return
             else:
-                # left the band -> reset the settle timer
                 self._settle_start = None
 
     # ---------- tare θ0 from current length ----------
@@ -436,10 +476,10 @@ class autoRubberWindow(QtWidgets.QMainWindow):
             print_console("[tare] No data", channel="rubber"); return
         Lext = counts_to_mm(frame.get(self.plot2_key, 0.0))
         Le2e = self._L0_e2e + Lext  # convert extension → E2E for correct inversion
-        num = Le2e*Le2e - (self.A*self.A + self.B*self.B)
+        num = (self.A*self.A + self.B*self.B) - (Le2e*Le2e)
         den = 2.0*self.A*self.B if self.A*self.B != 0 else 1.0
-        s   = max(-1.0, min(1.0, num/den))
-        theta0 = math.degrees(math.asin(s))
+        c   = max(-1.0, min(1.0, num/den))
+        theta0 = math.degrees(math.acos(c))
         self.spin_theta0.setValue(theta0)
         print_console(f"[tare] θ0 set to {theta0:.2f} deg (from Le2e={Le2e:.2f} mm, L0={self._L0_e2e:.2f})",
                       channel="rubber")
@@ -460,6 +500,12 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         self._stop_control()
         if self._zeroing:
             self._finish_zeroing()
+        # NEW: release shared sensor stream and stop logger if it’s still running
+        try:
+            if self.io is not None and hasattr(self.io, "release_stream"):
+                self.io.release_stream(self._stream_tag)
+        except Exception:
+            pass
         disconnect_console(self.console)
         self.closed.emit()
         super().closeEvent(e)

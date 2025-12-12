@@ -3,9 +3,6 @@ import math
 
 class RotaryToLinearTrajectory:
     """
-    L_sp(t) for a rotating shaft driving a linear actuator via:
-        L(θ) = sqrt(A^2 + B^2 + 2 A B sin θ)
-    with θ(t) = θ0 + ω t, ω = Δθ / T.
     Provides L(t) and dL/dt(t) for feed-forward.
 
     Units: A, B in mm. θ0, Δθ in degrees. t in seconds. Returns mm and mm/s.

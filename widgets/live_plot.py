@@ -57,11 +57,43 @@ class LivePlotWidget(QtWidgets.QWidget):
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
 
+        # --- color palette ---
+        self.colors = {
+            "main": "#1f77b4",        # blue
+            "main_ma": "#1f77b4",     # same hue, dashed
+            "overlay": [
+                "#d62728",            # red
+                "#2ca02c",            # green
+                "#9467bd",            # purple
+                "#8c564b",            # brown
+                "#e377c2",            # pink
+                "#7f7f7f",            # grey
+            ],
+            "velocity": "#ff7f0e",    # orange
+            "velocity_ma": "#ffbb78", # light orange
+        }
+        self._overlay_color_idx = 0
+
         # main line
-        (self.line,) = self.ax.plot([], [], lw=1.6, label=self.main_label)
+        (self.line,) = self.ax.plot(
+            [],
+            [],
+            lw=1.6,
+            label=self.main_label,
+            color=self.colors["main"],
+        )
+
         self.line_ma = None
         if self.show_ma:
-            (self.line_ma,) = self.ax.plot([], [], lw=1.0, linestyle="--", alpha=0.7, label=f"{self.main_label} (MA)")
+            (self.line_ma,) = self.ax.plot(
+                [],
+                [],
+                lw=1.0,
+                linestyle="--",
+                alpha=0.7,
+                label=f"{self.main_label} (MA)",
+                color=self.colors["main_ma"],
+            )
 
         # secondary axis (velocity)
         self.ax2 = None
@@ -69,9 +101,23 @@ class LivePlotWidget(QtWidgets.QWidget):
         self.vel_ma_line = None
         if self.show_velocity:
             self.ax2 = self.ax.twinx()
-            (self.vel_line,) = self.ax2.plot([], [], lw=1.2, label="Velocity")
+            (self.vel_line,) = self.ax2.plot(
+                [],
+                [],
+                lw=1.2,
+                label="Velocity",
+                color=self.colors["velocity"],
+            )
             if self.show_vel_ma:
-                (self.vel_ma_line,) = self.ax2.plot([], [], lw=1.0, linestyle="--", alpha=0.7, label="Velocity (MA)")
+                (self.vel_ma_line,) = self.ax2.plot(
+                    [],
+                    [],
+                    lw=1.0,
+                    linestyle="--",
+                    alpha=0.7,
+                    label="Velocity (MA)",
+                    color=self.colors["velocity_ma"],
+                )
             if y2min is not None and y2max is not None:
                 self.ax2.set_ylim(y2min, y2max)
             if self.y2label:
@@ -126,7 +172,17 @@ class LivePlotWidget(QtWidgets.QWidget):
 
     def add_overlay(self, label, fn):
         """Add an overlay series on the primary y-axis."""
-        (line,) = self.ax.plot([], [], lw=1.4, linestyle=":", label=label)
+        color = self.colors["overlay"][self._overlay_color_idx % len(self.colors["overlay"])]
+        self._overlay_color_idx += 1
+
+        (line,) = self.ax.plot(
+            [],
+            [],
+            lw=1.4,
+            linestyle=":",
+            label=label,
+            color=color,
+        )
         self._overlays.append({
             "label": label,
             "fn": fn,
@@ -205,7 +261,10 @@ class LivePlotWidget(QtWidgets.QWidget):
         # main moving average
         if self.line_ma:
             y_ma = self._moving_average(self.y, self.ma_window)
-            self.line_ma.set_data(np.asarray(self.t[-len(y_ma):]), np.asarray(y_ma))
+            self.line_ma.set_data(
+                np.asarray(self.t[-len(y_ma):]),
+                np.asarray(y_ma),
+            )
 
         # overlays
         for ov in self._overlays:
@@ -216,7 +275,10 @@ class LivePlotWidget(QtWidgets.QWidget):
             self.vel_line.set_data(np.asarray(self.t), np.asarray(self.y_vel))
             if self.show_vel_ma and self.vel_ma_line:
                 v_ma = self._moving_average(self.y_vel, self.vel_ma_window)
-                self.vel_ma_line.set_data(np.asarray(self.t[-len(v_ma):]), np.asarray(v_ma))
+                self.vel_ma_line.set_data(
+                    np.asarray(self.t[-len(v_ma):]),
+                    np.asarray(v_ma),
+                )
 
         # legend (combine ax + ax2)
         if self.show_legend and not self._legend_drawn:

@@ -2,7 +2,7 @@ from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QWidget, QPlainTextEdit
 
 # ✅ These map to the correct hardware paths in your updated conversions.py
-from controller.conversions import percent_to_bits, bits_to_length, bits_to_torque
+from controller.conversions import percent_to_bits, adc_bits_to_length, bits_to_torque
 from widgets.live_plot import LivePlotWidget
 from utils.console_print import connect_console, disconnect_console, print_console
 
@@ -28,7 +28,7 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         self.plot1 = LivePlotWidget(
             self, self._data_fn_for(self.plot1_key),
             50, 10.0,
-            ymin=0, ymax=500,
+            ymin=0, ymax=80,
             show_ma=True, ma_window=20
         )
         self.plot1.ax.set_ylabel("Torque [Nm]")
@@ -36,7 +36,7 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         self.plot2 = LivePlotWidget(
             self, self._data_fn_for(self.plot2_key),
             50, 10.0,
-            ymin=0, ymax=1000,
+            ymin=0, ymax=550,
             show_ma=True, ma_window=10,
             show_velocity=True, vel_window=7,
             y2min=-50, y2max=50, y2label="Velocity [mm/s]",
@@ -123,7 +123,7 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         if "torque" in key_l:
             converter = bits_to_torque         # ADC bits → torque [Nm]
         elif "pos" in key_l or "length" in key_l:
-            converter = bits_to_length         # ADC bits → length [mm]
+            converter = adc_bits_to_length         # ADC bits → length [mm]
         else:
             converter = float                  # passthrough
 
@@ -186,15 +186,15 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         print_console("Back button pressed", channel="rubber")
 
     def on_winch_up(self):
-        self._send_cmd("WINCH:UP")
+        self._send_cmd("RUBBER:WINCH:UP")
 
     def on_winch_down(self):
-        self._send_cmd("WINCH:DOWN")
+        self._send_cmd("RUBBER:WINCH:DOWN")
 
     def on_stop(self):
         self._send_cmd("rubber:SPEED:0")
         self._send_cmd("ALL:DIR:OFF")
-        self._send_cmd("WINCH:STOP")
+        self._send_cmd("RUBBER:WINCH:STOP")
         # cleanly untoggle without re-entering handlers
         for btn in (self.btn_forward, self.btn_back):
             was = btn.blockSignals(True)
