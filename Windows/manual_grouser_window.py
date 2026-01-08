@@ -1,7 +1,11 @@
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtWidgets import QWidget, QPlainTextEdit
 
-from controller.conversions import percent_to_bits, bits_to_length
+from controller.conversions import (
+    percent_to_bits,
+    adc_bits_to_length,   # position/length
+    bits_to_torque,       # torque
+)
 from widgets.live_plot import LivePlotWidget
 from utils.console_print import connect_console, disconnect_console, print_console
 
@@ -29,6 +33,7 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
             50, 10.0, ymin=0, ymax=1000, show_ma=True, ma_window=10
         )
         self.plot1.ax.set_ylabel("Torque [Nm]")
+        self.plot1.ax.grid(True, which="both", linestyle="--", alpha=0.4)
 
         self.plot2 = LivePlotWidget(
             self, self._data_fn_for(self.plot2_key),
@@ -39,6 +44,13 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
             show_vel_ma=True, vel_ma_window=50
         )
         self.plot2.ax.set_ylabel("Length [mm]")
+        self.plot2.ax.grid(True, which="both", linestyle="--", alpha=0.4)
+        # If LivePlotWidget creates a secondary axis (velocity), grid it too
+        try:
+            if getattr(self.plot2, "ax2", None) is not None:
+                self.plot2.ax2.grid(True, which="both", linestyle="--", alpha=0.25)
+        except Exception:
+            pass
 
         # --- controls ---
         self.spin_speed = QtWidgets.QDoubleSpinBox()
@@ -121,18 +133,33 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         print_console("Manual Grouser ready (JOG mode).", channel="grouser")
 
     # ---------- data ----------
-    def _data_fn_for(self, key):
+    def _data_fn_for(self, key: str):
+        """
+        Match auto_grouser_window behavior:
+          - torque keys -> bits_to_torque
+          - pos/length keys -> adc_bits_to_length
+        """
+        kl = (key or "").lower()
+        if "torque" in kl:
+            conv = bits_to_torque
+        elif "pos" in kl or "length" in kl:
+            conv = adc_bits_to_length
+        else:
+            conv = float
+
         def _fn(_t):
             if not self.io:
-                return self._last_values.get(key, 0.0)
+                return float(self._last_values.get(key, 0.0))
             frame = self.io.snapshot() or {}
-            val = frame.get(key)
+            val = frame.get(key, None)
+            if val is None:
+                return float(self._last_values.get(key, 0.0))
             try:
-                fval = float(bits_to_length(float(val)))
+                fval = float(conv(float(val)))
                 self._last_values[key] = fval
                 return fval
             except Exception:
-                return self._last_values.get(key, 0.0)
+                return float(self._last_values.get(key, 0.0))
         return _fn
 
     # ---------- ACTUATOR JOG ----------

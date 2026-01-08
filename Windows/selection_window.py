@@ -89,6 +89,6 @@ class SelectionWindow(QMainWindow):
         self.child.show()
 
     def run_auto_pressure(self):
-        self.child = auto_pressure_window.autoPressureWindow(parent=self)
+        self.child = auto_pressure_window.AutoPressureWindow(parent=self, io_worker=self.io)
         self.child.closed.connect(self.show)
         self.child.show()

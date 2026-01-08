@@ -8,16 +8,20 @@ import sys
 import numpy as np
 import pandas as pd
 
-# ---- import your shared conversions (rubber / grouser) ----
+import matplotlib
+matplotlib.use("Agg")  # ensure PNG saving works headless / on Windows
+import matplotlib.pyplot as plt
+
+# Your shared conversion module (rubber/grouser)
 from controller.conversions import (
     adc_bits_to_voltage,
     adc_bits_to_length,
     bits_to_torque,
 )
 
-# ==========================================================
-# Pressure conversions (EXACTLY matching ManualPressureWindow)
-# ==========================================================
+# -------------------------
+# Pressure conversions (match ManualPressureWindow)
+# -------------------------
 def _clamp_05_45(v: float) -> float:
     if v < 0.5:
         return 0.5
@@ -43,122 +47,236 @@ def pressure_bits_to_pos_mm(bits: float) -> float:
         return np.nan
 
 
-def bits_to_volts(bits: float) -> float:
-    try:
-        return float(adc_bits_to_voltage(int(bits)))
-    except Exception:
-        return np.nan
-
-
-# ==========================================================
-# Column mapping
-# raw_column -> (new_column, conversion_fn)
-# ==========================================================
-CONVERSIONS = {
-    # ---- Pressure ----
-    "pressure_force": ("pressure_force_N", pressure_bits_to_force_newton),
-    "pressure_pos":   ("pressure_pos_mm",  pressure_bits_to_pos_mm),
-
-    # ---- Rubber ----
-    "rubber_pos":     ("rubber_pos_mm",
-                       lambda b: adc_bits_to_length(int(b)) if pd.notna(b) else np.nan),
-    "rubber_torque":  ("rubber_torque_Nm",
-                       lambda b: bits_to_torque(int(b)) if pd.notna(b) else np.nan),
-
-    # ---- Grouser ----
-    "grouser_pos":    ("grouser_pos_mm",
-                       lambda b: adc_bits_to_length(int(b)) if pd.notna(b) else np.nan),
-    "grouser_torque": ("grouser_torque_Nm",
-                       lambda b: bits_to_torque(int(b)) if pd.notna(b) else np.nan),
-}
-
-
-# ==========================================================
-# CSV loading (semicolon-delimited)
-# ==========================================================
+# -------------------------
+# CSV loading (comma-delimited)
+# -------------------------
 def read_log_csv(path: Path) -> pd.DataFrame:
-    """
-    Read semicolon-delimited log CSV.
-    Uses python engine to tolerate malformed rows.
-    """
     return pd.read_csv(
         path,
-        sep=";",
+        sep=",",
         engine="python",
-        on_bad_lines="skip",   # skip broken rows instead of crashing
+        on_bad_lines="skip",
     )
 
 
-# ==========================================================
-# Processing
-# ==========================================================
-def process_file(path: Path, add_volts: bool = True, overwrite: bool = False) -> Path:
+# -------------------------
+# Detect test prefix from filename
+# -------------------------
+def detect_prefix(file_path: Path) -> str:
+    name = file_path.name.lower()
+    for p in ("rubber", "pressure", "grouser"):
+        if name.startswith(p):
+            return p
+    stem = file_path.stem.lower()
+    head = stem.split("_")[0].split("-")[0]
+    return head if head in ("rubber", "pressure", "grouser") else "unknown"
+
+
+# -------------------------
+# Fuzzy column detection
+# -------------------------
+def _norm(s: str) -> str:
+    return "".join(ch for ch in s.lower() if ch.isalnum() or ch == "_")
+
+
+def find_first_col(df: pd.DataFrame, must_contain: list[str]) -> str | None:
+    for c in df.columns:
+        nc = _norm(str(c))
+        if all(tok in nc for tok in must_contain):
+            return c
+    return None
+
+
+def detect_time_col(df: pd.DataFrame) -> str | None:
+    for tokens in (["time", "ms"], ["timestamp", "ms"], ["t", "ms"], ["ms"]):
+        c = find_first_col(df, tokens)
+        if c:
+            return c
+    return find_first_col(df, ["time"])
+
+
+def add_time_seconds(df: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
+    used = detect_time_col(df)
+    if not used:
+        return df, None
+
+    s = pd.to_numeric(df[used], errors="coerce")
+    if s.notna().sum() == 0:
+        return df, None
+
+    t0 = float(s.dropna().iloc[0])
+    df["t_s"] = (s - t0) / 1000.0
+    return df, used
+
+
+# -------------------------
+# Resolve raw bit columns
+# -------------------------
+def resolve_raw_columns(df: pd.DataFrame, prefix: str) -> dict[str, str]:
+    if prefix == "rubber":
+        return {
+            "pos_bits": find_first_col(df, ["rubber", "pos"]),
+            "y_bits":   find_first_col(df, ["rubber", "torque"]),
+        }
+    if prefix == "grouser":
+        return {
+            "pos_bits": find_first_col(df, ["grouser", "pos"]),
+            "y_bits":   find_first_col(df, ["grouser", "torque"]),
+        }
+    if prefix == "pressure":
+        return {
+            "pos_bits": find_first_col(df, ["pressure", "pos"]),
+            "y_bits":   find_first_col(df, ["pressure", "force"]),
+        }
+    return {"pos_bits": None, "y_bits": None}
+
+
+def convert_columns(df: pd.DataFrame, prefix: str, raw: dict[str, str]):
+    if prefix in ("rubber", "grouser"):
+        pos_eng = f"{prefix}_pos_mm"
+        y_eng   = f"{prefix}_torque_Nm"
+        y_label = "Torque [Nm]"
+
+        if raw["pos_bits"] in df:
+            df[pos_eng] = pd.to_numeric(df[raw["pos_bits"]], errors="coerce").apply(
+                lambda b: adc_bits_to_length(int(b)) if pd.notna(b) else np.nan
+            )
+        if raw["y_bits"] in df:
+            df[y_eng] = pd.to_numeric(df[raw["y_bits"]], errors="coerce").apply(
+                lambda b: bits_to_torque(int(b)) if pd.notna(b) else np.nan
+            )
+
+    elif prefix == "pressure":
+        pos_eng = "pressure_pos_mm"
+        y_eng   = "pressure_force_N"
+        y_label = "Force [N]"
+
+        if raw["pos_bits"] in df:
+            df[pos_eng] = pd.to_numeric(df[raw["pos_bits"]], errors="coerce").apply(
+                pressure_bits_to_pos_mm
+            )
+        if raw["y_bits"] in df:
+            df[y_eng] = pd.to_numeric(df[raw["y_bits"]], errors="coerce").apply(
+                pressure_bits_to_force_newton
+            )
+    else:
+        return df, None
+
+    return df, {
+        "pos": pos_eng,
+        "y": y_eng,
+        "y_label": y_label,
+    }
+
+
+# -------------------------
+# Plot helpers
+# -------------------------
+def _save_plot(path: Path, x, y, xlabel: str, ylabel: str, title: str):
+    df = pd.DataFrame({"x": x, "y": y}).dropna()
+    if len(df) < 2:
+        return
+
+    plt.figure()
+    plt.plot(df["x"], df["y"])
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(path, dpi=150)
+    plt.close()
+
+
+def _save_dual_y_plot(
+    path: Path,
+    t,
+    pos,
+    y,
+    y_label: str,
+    title: str,
+):
+    df = pd.DataFrame({"t": t, "pos": pos, "y": y}).dropna()
+    if len(df) < 2:
+        return
+
+    fig, ax1 = plt.subplots()
+
+    # Position (blue)
+    l1, = ax1.plot(df["t"], df["pos"], color="tab:blue", label="Position [mm]")
+    ax1.set_xlabel("Time [s]")
+    ax1.set_ylabel("Position [mm]", color="tab:blue")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+    # Torque / Force (red)
+    ax2 = ax1.twinx()
+    l2, = ax2.plot(df["t"], df["y"], color="tab:red", label=y_label)
+    ax2.set_ylabel(y_label, color="tab:red")
+    ax2.tick_params(axis="y", labelcolor="tab:red")
+
+    ax1.legend(handles=[l1, l2], loc="best")
+    fig.suptitle(title)
+    fig.tight_layout()
+    plt.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+# -------------------------
+# Main processing
+# -------------------------
+def process_file(path: Path, overwrite: bool, make_pngs: bool):
     df = read_log_csv(path)
+    for c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors="ignore")
 
-    # Attempt numeric conversion where possible
-    for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="ignore")
+    prefix = detect_prefix(path)
+    df, _ = add_time_seconds(df)
 
-    converted_raw_cols: list[str] = []
+    raw = resolve_raw_columns(df, prefix)
+    df, meta = convert_columns(df, prefix, raw)
 
-    # Apply conversions
-    for raw_col, (new_col, fn) in CONVERSIONS.items():
-        if raw_col in df.columns:
-            converted_raw_cols.append(raw_col)
-            series = pd.to_numeric(df[raw_col], errors="coerce")
-            df[new_col] = series.apply(fn)
+    out = path if overwrite else path.with_name(path.stem + "_processed.csv")
+    df.to_csv(out, index=False)
 
-    # Optional: add voltage columns for converted raw channels
-    if add_volts:
-        for col in converted_raw_cols:
-            df[f"{col}_V"] = pd.to_numeric(df[col], errors="coerce").apply(bits_to_volts)
+    if make_pngs and meta and "t_s" in df:
+        _save_plot(
+            out.with_name(out.stem + f"_{prefix}_pos_vs_time.png"),
+            df["t_s"], df[meta["pos"]],
+            "Time [s]", "Position [mm]",
+            f"{prefix.capitalize()}: Position vs Time",
+        )
 
-    # Output file
-    out_path = path if overwrite else path.with_name(path.stem + "_processed" + path.suffix)
-    df.to_csv(out_path, index=False, sep=";")
+        _save_plot(
+            out.with_name(out.stem + f"_{prefix}_y_vs_time.png"),
+            df["t_s"], df[meta["y"]],
+            "Time [s]", meta["y_label"],
+            f"{prefix.capitalize()}: {meta['y_label']} vs Time",
+        )
 
-    return out_path
-
-
-def iter_csv_files(p: Path, recursive: bool) -> list[Path]:
-    if p.is_file():
-        return [p]
-    if not p.exists():
-        return []
-    pattern = "**/*.csv" if recursive else "*.csv"
-    return sorted(p.glob(pattern))
+        _save_dual_y_plot(
+            out.with_name(out.stem + f"_{prefix}_pos_and_y_vs_time.png"),
+            df["t_s"], df[meta["pos"]], df[meta["y"]],
+            meta["y_label"],
+            f"{prefix.capitalize()}: Position & {meta['y_label']} vs Time",
+        )
 
 
-# ==========================================================
+# -------------------------
 # CLI
-# ==========================================================
-def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(
-        description="Postprocess Bevameter logs: ADC bits → engineering units."
-    )
-    ap.add_argument("input", type=str, help="CSV file or folder")
-    ap.add_argument("--recursive", action="store_true", help="Process folders recursively")
-    ap.add_argument("--no-volts", action="store_true", help="Do not add *_V columns")
-    ap.add_argument("--overwrite", action="store_true", help="Overwrite input CSV")
+# -------------------------
+def main(argv):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("input")
+    ap.add_argument("--recursive", action="store_true")
+    ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--no-plots", action="store_true")
     args = ap.parse_args(argv)
 
-    p = Path(args.input).expanduser().resolve()
-    files = iter_csv_files(p, args.recursive)
-
-    if not files:
-        print(f"[ERROR] No CSV files found at: {p}")
-        return 2
+    p = Path(args.input).resolve()
+    files = [p] if p.is_file() else sorted(p.glob("**/*.csv" if args.recursive else "*.csv"))
 
     for f in files:
-        try:
-            out = process_file(
-                f,
-                add_volts=(not args.no_volts),
-                overwrite=args.overwrite,
-            )
-            print(f"[OK] {f.name} → {out.name}")
-        except Exception as e:
-            print(f"[FAIL] {f}: {e}")
+        process_file(f, args.overwrite, not args.no_plots)
+        print(f"[OK] {f.name}")
 
     return 0
 

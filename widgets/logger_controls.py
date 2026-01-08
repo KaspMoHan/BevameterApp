@@ -1,37 +1,52 @@
 # widgets/logger_controls.py
-from PySide6 import QtCore, QtWidgets
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLineEdit, QFileDialog
+from PySide6 import QtWidgets
+from PySide6.QtWidgets import (
+    QWidget, QHBoxLayout, QPushButton, QLineEdit, QFileDialog
+)
 from pathlib import Path
-import time
+
 
 class LoggerControls(QWidget):
     """
     Reusable Start/Stop logging control that talks to io_worker (SerialWorker).
-    - Works with any window that has self.io (the SerialWorker) and a console channel.
-    - Lets user pick a folder and base name; defaults to ./logs and 'session'.
-    - Calls io.start_logger(<folder>/<base>) and io.stop_logger().
+
+    Updated behavior:
+    - User MUST enter a comment (required) or logging won't start
+    - Test type is provided by the window (auto-grouser, manual-pressure, etc.)
+    - Logger produces filenames like:
+        YYYY-MM-DD-HHMM__<test_type>__<comment>__NNN.csv
+      (safe for Windows; ':' not allowed in filenames)
     """
-    def __init__(self, parent=None, io_worker=None, console_channel: str = "system",
-                 default_folder: str = "logs", default_base: str = "session"):
+    def __init__(
+        self,
+        parent=None,
+        io_worker=None,
+        console_channel: str = "system",
+        default_folder: str = "logs",
+        default_test_type: str = "session",
+    ):
         super().__init__(parent)
         self.io = io_worker
         self.console_channel = console_channel
 
+        self.btn_toggle = QPushButton("Start logging")
         self.folder_edit = QLineEdit(default_folder)
-        self.base_edit   = QLineEdit(default_base)
-        self.btn_browse  = QPushButton("Folder…")
-        self.btn_toggle  = QPushButton("Start logging")
+        self.test_edit = QLineEdit(default_test_type)
+        self.test_edit.setToolTip("Test type (e.g. auto-grouser, manual-pressure)")
+        self.comment_edit = QLineEdit("")
+        self.comment_edit.setPlaceholderText("REQUIRED comment (e.g. sand_10pct_run2)")
+        self.btn_browse = QPushButton("Folder…")
 
         lay = QHBoxLayout(self)
         lay.addWidget(self.btn_toggle)
         lay.addWidget(self.folder_edit, stretch=1)
-        lay.addWidget(self.base_edit)
+        lay.addWidget(self.test_edit)
+        lay.addWidget(self.comment_edit, stretch=2)
         lay.addWidget(self.btn_browse)
 
         self.btn_browse.clicked.connect(self._pick_folder)
         self.btn_toggle.clicked.connect(self._toggle)
 
-        # reflect current state if already running
         self._sync_btn()
 
     def _pick_folder(self):
@@ -41,13 +56,12 @@ class LoggerControls(QWidget):
             self.folder_edit.setText(folder)
 
     def _is_logging(self) -> bool:
-        # We don't reach into private attrs; ask by behavior:
-        # If start_logger is no-op when running, we'll infer by remembering label.
+        # UI-based inference (safe enough). If you later add SerialWorker.is_logging(),
+        # you can replace this with a real query.
         return self.btn_toggle.text().startswith("Stop")
 
     def _sync_btn(self, running: bool = None):
         if running is None:
-            # optimistic: keep current text unless caller specifies
             running = self._is_logging()
         self.btn_toggle.setText("Stop logging" if running else "Start logging")
 
@@ -64,18 +78,25 @@ class LoggerControls(QWidget):
             return
 
         if not self._is_logging():
-            folder = self.folder_edit.text().strip() or "logs"
-            base   = self.base_edit.text().strip() or "session"
+            folder = (self.folder_edit.text().strip() or "logs").strip()
+            test_type = (self.test_edit.text().strip() or "session").strip()
+            comment = (self.comment_edit.text().strip() or "").strip()
+
+            if not comment:
+                self._emit_console("[LOGGER] Please enter a comment to start logging.")
+                self.comment_edit.setFocus()
+                return
+
             Path(folder).mkdir(parents=True, exist_ok=True)
 
-            # compose base path (no extension; DataLogger appends timestamp+index)
-            base_path = str(Path(folder) / base)
-
             try:
-                # include a small suffix to distinguish windows if they share the same base
-                suffix = time.strftime("-%H%M%S")
-                self.io.start_logger(out_path=base_path + suffix)
-                self._emit_console(f"[LOGGER] started → {base_path}*.csv")
+                # NEW API: out_dir + test_type + comment (filename built in DataLogger)
+                self.io.start_logger(
+                    out_dir=folder,
+                    test_type=test_type,
+                    comment=comment,
+                )
+                self._emit_console("[LOGGER] started")
                 self._sync_btn(True)
             except Exception as e:
                 self._emit_console(f"[LOGGER] failed to start: {e}")

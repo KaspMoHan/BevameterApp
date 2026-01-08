@@ -130,10 +130,8 @@ class autoGrouserWindow(QtWidgets.QMainWindow):
             io_worker=self.io,
             console_channel="grouser",
             default_folder="logs",
-            default_base="grouser_auto"
+            default_test_type="auto-grouser"
         )
-
-        self.btn_log = QtWidgets.QPushButton("Log")  # kept for layout/back-compat; optional
 
         self.spin_deg    = QtWidgets.QDoubleSpinBox(); self.spin_deg.setRange(-3600, 3600); self.spin_deg.setValue(90.0)
         self.spin_time   = QtWidgets.QDoubleSpinBox(); self.spin_time.setRange(0.1, 300.0); self.spin_time.setValue(30.0)
@@ -164,7 +162,6 @@ class autoGrouserWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.logger_controls)  # NEW
         controls.addStretch()
         controls.addWidget(self.btn_stop)
-        controls.addWidget(self.btn_log)
         controls_widget = QWidget(); controls_widget.setLayout(controls)
 
         # --- layout ---

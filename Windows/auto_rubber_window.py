@@ -142,10 +142,8 @@ class autoRubberWindow(QtWidgets.QMainWindow):
             io_worker=self.io,
             console_channel="rubber",
             default_folder="logs",
-            default_base="rubber_auto"
+            default_test_type="auto-rubber"
         )
-
-        self.btn_log = QtWidgets.QPushButton("Log")  # kept for layout/back-compat; optional
 
         # trajectory/PID/scaling
         self.spin_deg    = QtWidgets.QDoubleSpinBox(); self.spin_deg.setRange(-3600, 3600); self.spin_deg.setValue(90.0)
@@ -177,7 +175,6 @@ class autoRubberWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.logger_controls)  # NEW
         controls.addStretch()
         controls.addWidget(self.btn_stop)
-        controls.addWidget(self.btn_log)
         controls_widget = QWidget(); controls_widget.setLayout(controls)
 
         # --- layout ---

@@ -46,13 +46,25 @@ class DataLogger(threading.Thread):
     - Runs in its own daemon thread.
     - Auto-discovers columns on the first frame.
     - Rotates files by size.
+
+    File naming:
+      YYYY-MM-DD-HHMM__<test_type>__<comment>__NNN.csv
+    (Windows-safe: no ':' in filenames)
     """
-    def __init__(self, q: queue.Queue, out_path: str,
-                 rotate_mb: float = 100.0, flush_every: int = 200):
+    def __init__(
+        self,
+        q: queue.Queue,
+        out_dir: str,
+        test_type: str,
+        comment: str,
+        rotate_mb: float = 100.0,
+        flush_every: int = 200
+    ):
         import csv, os
         super().__init__(daemon=True)
         self.csv = csv
         self.os = os
+
         self.q = q
         self._stop = threading.Event()
         self._fh = None
@@ -62,9 +74,33 @@ class DataLogger(threading.Thread):
         self._rows = 0
         self._rotate_bytes = int(rotate_mb * 1024 * 1024)
         self._flush_every = max(1, int(flush_every))
-        self._base = out_path
+
+        self._out_dir = str(out_dir)
+        self._test_type = str(test_type)
+        self._comment = str(comment)
+
         self._index = 0
+        self.os.makedirs(self._out_dir, exist_ok=True)
         self._open_new_file()
+
+    @staticmethod
+    def _sanitize_part(s: str, maxlen: int = 60) -> str:
+        """
+        Make a string safe for Windows filenames:
+        - replace forbidden characters <>:"/\\|?* with '-'
+        - collapse whitespace
+        - truncate
+        """
+        s = (s or "").strip()
+        if not s:
+            return "NA"
+        bad = '<>:"/\\|?*'
+        for ch in bad:
+            s = s.replace(ch, "-")
+        s = " ".join(s.split())
+        if len(s) > maxlen:
+            s = s[:maxlen].rstrip()
+        return s
 
     def _open_new_file(self):
         if self._fh:
@@ -73,10 +109,17 @@ class DataLogger(threading.Thread):
                 self._fh.close()
             except Exception:
                 pass
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        path = f"{self._base}_{ts}_{self._index:03d}.csv"
+
+        dt = time.strftime("%Y-%m-%d-%H%M")  # Windows-safe (no ':')
+        test = self._sanitize_part(self._test_type, maxlen=30)
+        com  = self._sanitize_part(self._comment, maxlen=60)
+
+        filename = f"{dt}__{test}__{com}__{self._index:03d}.csv"
         self._index += 1
-        self._fh = open(path, "wt", newline="")
+
+        path = self.os.path.join(self._out_dir, filename)
+
+        self._fh = open(path, "wt", newline="", encoding="utf-8")
         self._writer = None
         self._fields = None
         self._bytes_written = 0
@@ -246,18 +289,32 @@ class SerialWorker(QtCore.QThread):
         else:
             self._poll_enabled = False
 
-    # --- logger control ---
-    def start_logger(self, out_path: str, rotate_mb: float = 100.0, flush_every: int = 200):
+    # --- logger control (UPDATED API) ---
+    def start_logger(
+        self,
+        out_dir: str,
+        test_type: str,
+        comment: str,
+        rotate_mb: float = 100.0,
+        flush_every: int = 200
+    ):
         if self._logger is not None:
             return
+
+        if not str(comment).strip():
+            self.console_text.emit("[LOGGER] missing comment; not started")
+            return
+
         self._logger = DataLogger(
             self.frame_bus.get_queue(),
-            out_path=out_path,
+            out_dir=out_dir,
+            test_type=test_type,
+            comment=comment,
             rotate_mb=rotate_mb,
             flush_every=flush_every,
         )
         self._logger.start()
-        self.console_text.emit(f"[LOGGER] started → {out_path}_*.csv")
+        self.console_text.emit("[LOGGER] started")
 
     def stop_logger(self):
         if self._logger is not None:
