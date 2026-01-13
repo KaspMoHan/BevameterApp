@@ -52,6 +52,10 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+        self._stream_tag = "grouser:manual"
+        if self.io is not None and hasattr(self.io, "acquire_stream"):
+            self.io.acquire_stream(self._stream_tag, hz=50.0)
+
         # --- controls ---
         self.spin_speed = QtWidgets.QDoubleSpinBox()
         self.spin_speed.setRange(0, 100)
@@ -80,7 +84,6 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.btn_return)
         controls.addStretch()
         controls.addWidget(self.btn_stop)
-        controls.addWidget(self.btn_log)
 
         controls_widget = QWidget()
         controls_widget.setLayout(controls)
@@ -218,6 +221,11 @@ class ManualGrouserWindow(QtWidgets.QMainWindow):
         try:
             self.plot1.stop()
             self.plot2.stop()
+        except Exception:
+            pass
+        try:
+            if self.io is not None and hasattr(self.io, "release_stream"):
+                self.io.release_stream(self._stream_tag)
         except Exception:
             pass
         self.on_stop()

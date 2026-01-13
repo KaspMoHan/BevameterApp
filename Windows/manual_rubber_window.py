@@ -44,6 +44,10 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         )
         self.plot2.ax.set_ylabel("Length [mm]")
 
+        self._stream_tag = "rubber:manual"
+        if self.io is not None and hasattr(self.io, "acquire_stream"):
+            self.io.acquire_stream(self._stream_tag, hz=50.0)
+
         # --- controls ---
         self.lbl_speed = QtWidgets.QLabel("Speed")
         self.spin_speed = QtWidgets.QDoubleSpinBox()
@@ -63,7 +67,7 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
         self.btn_winch_down = QtWidgets.QPushButton("Winch Down")
         self.btn_stop    = QtWidgets.QPushButton("Stop")
         self.btn_return  = QtWidgets.QPushButton("Return")
-        self.btn_log     = QtWidgets.QPushButton("Log")
+
 
         speed_row = QtWidgets.QHBoxLayout()
         speed_row.addWidget(self.lbl_speed)
@@ -227,6 +231,12 @@ class ManualRubberWindow(QtWidgets.QMainWindow):
     def closeEvent(self, e):
         try:
             self.plot1.stop(); self.plot2.stop()
+        except Exception:
+            pass
+
+        try:
+            if self.io is not None and hasattr(self.io, "release_stream"):
+                self.io.release_stream(self._stream_tag)
         except Exception:
             pass
         self.on_stop()
